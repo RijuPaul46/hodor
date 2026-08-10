@@ -1,19 +1,21 @@
 from parser.parser import Parser
-from engine.command_executor import Command_executor
+from engine.command_executor import CommandExecutor
 from storage.database import Database
-db=Database()
-text="SET name RIJU"
-text2='GET name'
-text3="SET age 20"
-text4 ='GET age'
-ls=[text,text2,text3,text4]
-parser=Parser()
-executor=Command_executor(db)
-for text in ls:
-    command=parser.parse(text)
 
-    result=executor.execute(command)
-    print(result)
-for pr in db.store:
-    print(pr)
-    print(db.store[pr].value)
+
+db = Database(capacity=1000)
+
+parser = Parser()
+
+executor = CommandExecutor(db)
+
+
+def process_command(text):
+
+    command = parser.parse(text)
+    if command is None :
+        return "EMPTY COMMAND"
+
+    result = executor.execute(command)
+
+    return result
