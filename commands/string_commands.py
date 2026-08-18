@@ -6,14 +6,43 @@ class StringCommands:
     def __init__(self, db):
         self.db = db
 
-    def set(self, key, value):
+    def set(self, *args):
+
+        if len(args) < 2:
+            return "ERR wrong number of arguments"
+
+        key = args[0]
+        value = args[1]
+
+        ttl = None
+
+        # SET key value EX seconds
+        if len(args) > 2:
+
+            if len(args) != 4:
+                return "ERR syntax error"
+
+            if args[2].upper() != "EX":
+                return "ERR syntax error"
+
+            try:
+                ttl = int(args[3])
+            except ValueError:
+                return "ERR invalid TTL"
+
+            if ttl <= 0:
+                return "ERR invalid TTL"
 
         obj = RedisObject(
             "STRING",
             value
         )
 
-        self.db.set(key, obj)
+        self.db.set(
+            key,
+            obj,
+            ttl
+        )
 
         return "OK"
 

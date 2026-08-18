@@ -1,79 +1,286 @@
-from datastructures.doubly_linked_list import Node
-from datastructures.doubly_linked_list import DoublyLinkedList
+import threading
+import time
+import heapq
+
+from datastructures.doubly_linked_list import (
+    Node,
+    DoublyLinkedList
+)
 
 
 class Database:
-    def __init__(self, capacity):
-        self.capacity = capacity
+
+    def __init__(self, capacity=1000):
+
+        # Main storage
+        # key -> Node
         self.store = {}
-        self.dll = DoublyLinkedList()
 
-    def set(self, key, redis_object):
+        # LRU
+        self.capacity = capacity
+        self.lru = DoublyLinkedList()
 
-        # ----------------------------
-        # Key already exists
-        # ----------------------------
-        if key in self.store:
+        # TTL
+        # key -> expiry timestamp
+        self.expiry = {}
 
-            node = self.store[key]
+        # Min heap
+        # (expiry_time, version, key)
+        self.expiry_heap = []
 
-            # Update the value
-            node.value = redis_object
+        # Used to invalidate old heap entries
+        #Repetadely update version for one key after processing ...
+        #so later 
+        self.expiry_version = {}
 
-            # Recently used
-            self.dll.move_to_front(node)
+        # Thread safety
+        self.lock = threading.Lock()
+        self.expiry_thread = threading.Thread(
+        target=self._expiry_worker,
+        daemon=True
+        )
 
-            return
+        self.expiry_thread.start()
 
-        # ----------------------------
-        # Memory full
-        # ----------------------------
-        if self.dll.size == self.capacity:
+    # --------------------------------------------------
+    # SET
+    # --------------------------------------------------
 
-            victim = self.dll.remove_tail()
+    def set(self, key, value, ttl=None):
 
-            if victim is not None:
-                del self.store[victim.key]
+        with self.lock:
 
-        # ----------------------------
-        # Insert new key
-        # ----------------------------
-        node = Node(key, redis_object)
+            # ------------------------------------------
+            # Existing key
+            # ------------------------------------------
 
-        self.dll.add_to_front(node)
+            if key in self.store:
 
-        self.store[key] = node
+                node = self.store[key]
+
+                node.value = value
+
+                self.lru.move_to_front(node)
+
+            # ------------------------------------------
+            # New key
+            # ------------------------------------------
+
+            else:
+
+                node = Node(key, value)
+
+                self.store[key] = node
+
+                self.lru.add_to_front(node)
+
+            # ------------------------------------------
+            # TTL handling
+            # ------------------------------------------
+
+            if ttl is not None:
+
+                expires_at = time.monotonic() + ttl
+
+                self.expiry[key] = expires_at
+
+                version = self.expiry_version.get(key, 0) + 1
+
+                self.expiry_version[key] = version
+
+                heapq.heappush(
+                    self.expiry_heap,
+                    (expires_at, version, key)
+                )
+
+            else:
+
+                # SET without TTL means
+                # key should live forever
+
+                self.expiry.pop(key, None)
+
+                self.expiry_version[key] = (
+                    self.expiry_version.get(key, 0) + 1
+                )
+
+            # ------------------------------------------
+            # LRU eviction
+            # ------------------------------------------
+
+            if len(self.store) > self.capacity:
+
+                old_node = self.lru.remove_tail()
+
+                if old_node is not None:
+
+                    old_key = old_node.key
+
+                    del self.store[old_key]
+
+                    self.expiry.pop(old_key, None)
+
+                    self.expiry_version[old_key] = (
+                        self.expiry_version.get(old_key, 0) + 1
+                    )
+
+    # --------------------------------------------------
+    # GET
+    # --------------------------------------------------
 
     def get(self, key):
 
-        if key not in self.store:
-            return None
+        with self.lock:
 
-        node = self.store[key]
+            node = self.store.get(key)
 
-        # Mark as recently used
-        self.dll.move_to_front(node)
+            if node is None:
+                return None
 
-        return node.value
+            # ------------------------------------------
+            # Check expiration
+            # ------------------------------------------
+
+            if self._is_expired(key):
+
+                self._delete_no_lock(key)
+
+                return None
+
+            # ------------------------------------------
+            # Mark as recently used
+            # ------------------------------------------
+
+            self.lru.move_to_front(node)
+
+            return node.value
+
+    # --------------------------------------------------
+    # DELETE
+    # --------------------------------------------------
 
     def delete(self, key):
 
-        if key not in self.store:
-            return 0
+        with self.lock:
 
-        node = self.store[key]
+            if key not in self.store:
+                return 0
 
-        self.dll.remove(node)
+            self._delete_no_lock(key)
+
+            return 1
+
+    # --------------------------------------------------
+    # INTERNAL DELETE
+    # --------------------------------------------------
+
+    def _delete_no_lock(self, key):
+
+        node = self.store.get(key)
+
+        if node is None:
+            return
+
+        self.lru.remove(node)
 
         del self.store[key]
 
-        return 1
+        self.expiry.pop(key, None)
 
-    def exists(self, key):
-        return key in self.store
+        # Invalidate any old heap entry
+        self.expiry_version[key] = (
+            self.expiry_version.get(key, 0) + 1
+        )
 
-    def size(self):
-        return len(self.store)
+    # --------------------------------------------------
+    # EXPIRATION CHECK
+    # --------------------------------------------------
 
-    def print_lru(self):
-        self.dll.print_list()
+    def _is_expired(self, key):
+
+        expires_at = self.expiry.get(key)
+
+        if expires_at is None:
+            return False
+
+        return time.monotonic() >= expires_at
+
+    
+    def _expiry_worker(self):
+
+        while True:
+
+            with self.lock:
+
+                # Nothing to expire
+                if not self.expiry_heap:
+                    sleep_time = 1
+                    entry = None
+
+                else:
+
+                    entry = self.expiry_heap[0]
+
+                    expires_at = entry[0]
+
+                    now = time.monotonic()
+
+                    sleep_time = expires_at - now
+
+            # ------------------------------------------
+            # Nothing currently needs processing
+            # ------------------------------------------
+
+            if entry is None:
+
+                time.sleep(sleep_time)
+
+                continue
+
+            # ------------------------------------------
+            # Earliest key hasn't expired
+            # ------------------------------------------
+
+            if sleep_time > 0:
+
+                time.sleep(sleep_time)
+
+                continue
+
+            # ------------------------------------------
+            # Earliest key has expired
+            # ------------------------------------------
+
+            with self.lock:
+
+                # Heap could have changed while
+                # we were sleeping.
+                if not self.expiry_heap:
+                    continue
+                    # entry get poped 
+                expires_at, version, key = heapq.heappop(
+                    self.expiry_heap
+                )
+
+                # --------------------------------------
+                # Check stale heap entry
+                # --------------------------------------
+
+                current_version = self.expiry_version.get(
+                    key,
+                    0
+                )
+
+                if current_version != version:
+                    continue
+
+                current_expiry = self.expiry.get(key)
+
+                if current_expiry != expires_at:
+                    continue
+
+                # --------------------------------------
+                # Current expiration
+                # --------------------------------------
+                print(f"Expired key: {key}")
+                self._delete_no_lock(key)

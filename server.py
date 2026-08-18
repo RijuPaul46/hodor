@@ -1,9 +1,38 @@
 import socket
+import threading
 import main
 
 
 HOST = "127.0.0.1"
 PORT = 6379
+
+
+def handle_client(client, address):
+
+    print(f"Client connected: {address}")
+
+    while True:
+
+        data = client.recv(1024)
+
+        if not data:
+            print(f"Client disconnected: {address}")
+            break
+
+        text = data.decode().strip()
+
+        if not text:
+            continue
+
+        print(f"Received from {address}: {text}")
+
+        result = main.process_command(text)
+
+        print(f"Result for {address}: {result}")
+
+        client.send(str(result).encode())
+
+    client.close()
 
 
 server = socket.socket(
@@ -13,26 +42,18 @@ server = socket.socket(
 
 server.bind((HOST, PORT))
 
-server.listen(1)
+server.listen()
 
 print(f"HODOR is running on {HOST}:{PORT}")
 
-client, address = server.accept()
 
-print(f"Client connected, address: {address}")
+while True:
 
-data = client.recv(1024)
-if not data:
-    client.close()
-else:
+    client, address = server.accept()
 
-    text = data.decode()
+    thread = threading.Thread(
+        target=handle_client,
+        args=(client, address)
+    )
 
-    result = main.process_command(text)
-
-    print(result)
-
-    client.send(result.encode())
-
-    client.close()
-    server.close()
+    thread.start()

@@ -20,7 +20,7 @@ class CommandExecutor:
 
     def execute(self, command):
 
-        cmd = command.command
+        cmd = command.command.upper()
 
         handler = self.handlers.get(cmd)
 
