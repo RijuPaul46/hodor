@@ -1,4 +1,5 @@
 import socket
+import threading
 import main
 
 
@@ -23,24 +24,55 @@ server.listen()
 print(f"HODOR is running on {HOST}:{PORT}")
 
 
+def handle_client(client, address):
+
+    print(f"Client connected: {address}")
+
+    # Create ONE session for this connection
+    session = main.create_session()
+
+    try:
+
+        while True:
+
+            data = client.recv(1024)
+
+            if not data:
+                break
+
+            # Give the data to main
+            response = main.process(
+                session,
+                data
+            )
+
+            if response is not None:
+
+                client.sendall(response)
+
+    except ConnectionResetError:
+
+        print(
+            f"Connection reset: {address}"
+        )
+
+    finally:
+
+        client.close()
+
+        print(
+            f"Client disconnected: {address}"
+        )
+
+
 while True:
 
     client, address = server.accept()
 
-    print(f"Client connected: {address}")
+    thread = threading.Thread(
+        target=handle_client,
+        args=(client, address),
+        daemon=True
+    )
 
-    while True:
-
-        data = client.recv(1024)
-
-        if not data:
-            break
-
-        response = main.process_data(data)
-
-        if response is not None:
-            client.sendall(response)
-
-    client.close()
-
-    print(f"Client disconnected: {address}")
+    thread.start()

@@ -32,25 +32,28 @@ class HSPParser:
 
         # Add newly received bytes to our buffer
         self.buffer += data
+        messages=[]
+        while self.buffer:
 
-        try:
+            try:
 
-            # Try to parse one complete HSP value
-            value, position = self._parse_value(
-                self.buffer,
-                0
-            )
+                # Try to parse one complete HSP value
+                value, position = self._parse_value(
+                    self.buffer,
+                    0
+                )
 
-        except IncompleteHSPMessage:
+            except IncompleteHSPMessage:
 
-            # We don't have enough data yet.
-            # Keep everything in the buffer.
-            return None
+                # We don't have enough data yet.
+                # Keep everything in the buffer.
+                break
 
-        # Remove the bytes that we successfully consumed.
-        self.buffer = self.buffer[position:]
+            # Remove the bytes that we successfully consumed.
+            messages.append(value)
+            self.buffer = self.buffer[position:]
 
-        return value
+        return messages
 
     # ==================================================
     # GENERAL VALUE PARSER

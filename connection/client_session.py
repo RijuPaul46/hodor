@@ -8,39 +8,94 @@ class ClientSession:
 
     def __init__(self, executor):
 
+        # One parser for this client connection
         self.parser = HSPParser()
 
+        # Shared command executor
         self.executor = executor
-
 
     def process(self, data):
 
-        parts = self.parser.feed(data)
+        # Feed newly received TCP bytes to this
+        # client's parser.
+        messages = self.parser.feed(data)
 
-        # Message is incomplete
-        if parts is None:
+        # No complete HSP message yet
+        if not messages:
             return None
 
-        # HSP request should be an array
-        if not isinstance(parts, list):
-            return HSPEncoder.error(
-                "request must be an array"
+        responses = []
+
+        # Process every complete HSP message
+        # found in this recv() call.
+        for parts in messages:
+
+            # --------------------------------------
+            # Request must be an HSP array
+            # --------------------------------------
+
+            if not isinstance(parts, list):
+
+                responses.append(
+                    HSPEncoder.error(
+                        "request must be an array"
+                    )
+                )
+
+                continue
+
+            # --------------------------------------
+            # Empty array
+            # --------------------------------------
+
+            if len(parts) == 0:
+
+                responses.append(
+                    HSPEncoder.error(
+                        "empty command"
+                    )
+                )
+
+                continue
+
+            # --------------------------------------
+            # First element = command
+            # --------------------------------------
+
+            command_name = parts[0]
+
+            # --------------------------------------
+            # Remaining elements = arguments
+            # --------------------------------------
+
+            arguments = parts[1:]
+
+            # --------------------------------------
+            # Create Command object
+            # --------------------------------------
+
+            command = Command(
+                command_name.upper(),
+                arguments
             )
 
-        if len(parts) == 0:
-            return HSPEncoder.error(
-                "empty command"
+            # --------------------------------------
+            # Execute command
+            # --------------------------------------
+
+            result = self.executor.execute(
+                command
             )
 
-        command_name = parts[0]
+            # --------------------------------------
+            # Convert result to HSP bytes
+            # --------------------------------------
 
-        arguments = parts[1:]
+            response = HSPEncoder.encode(
+                result
+            )
 
-        command = Command(
-            command_name.upper(),
-            arguments
-        )
+            responses.append(response)
 
-        result = self.executor.execute(command)
-
-        return HSPEncoder.encode(result)
+        # Send all responses as one byte stream
+        return b"".join(responses)
