@@ -1,0 +1,9 @@
+SET name Riju
+SET age 20
+DEL age
+SET name Riju
+SET age 20
+DEL age
+SET name Riju
+SET age 20
+DEL age

@@ -1,4 +1,5 @@
 import socket
+import shlex
 
 from protocol.hsp_encoder import HSPEncoder
 from protocol.hsp_parser import HSPParser
@@ -15,7 +16,6 @@ client = socket.socket(
 
 client.connect((HOST, PORT))
 
-
 parser = HSPParser()
 
 
@@ -23,46 +23,56 @@ while True:
 
     text = input("Hodor> ")
 
+    # Exit client
     if text.lower() == "exit":
         break
 
-    # ------------------------------------------
-    # Convert user input into command parts
-    # ------------------------------------------
+    # Ignore empty input
+    if not text.strip():
+        continue
 
-    tokens = text.split()
+    try:
+        # Convert command line into arguments.
+        #
+        # SET name "Riju Paul"
+        #
+        # becomes:
+        #
+        # ["SET", "name", "Riju Paul"]
+
+        tokens = shlex.split(text)
+
+    except ValueError as e:
+
+        print("Syntax error:", e)
+        continue
 
     if not tokens:
         continue
 
-    # ------------------------------------------
-    # Convert command into HSP array
-    # ------------------------------------------
-
+    # Convert command into HSP
     request = HSPEncoder.array(tokens)
 
     print("Sending:", request)
 
-    # ------------------------------------------
-    # Send HSP bytes
-    # ------------------------------------------
-
+    # Send HSP bytes to server
     client.sendall(request)
 
-    # ------------------------------------------
     # Receive response
-    # ------------------------------------------
-
     while True:
 
         data = client.recv(1024)
 
         if not data:
-            print("Server disconnected")
-            break
 
+            print("Server disconnected")
+            client.close()
+            exit()
+
+        # Parse received HSP response
         responses = parser.feed(data)
 
+        # Response is incomplete
         if not responses:
             continue
 

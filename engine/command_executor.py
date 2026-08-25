@@ -4,7 +4,11 @@ from commands.hash_commands import HashCommands
 
 class CommandExecutor:
 
-    def __init__(self, db):
+    def __init__(self, db, aof=None):
+
+        self.db = db
+
+        self.aof = aof
 
         self.string = StringCommands(db)
         self.hash = HashCommands(db)
@@ -18,13 +22,26 @@ class CommandExecutor:
             "HGET": self.hash.hget,
         }
 
-    def execute(self, command):
+    def execute(self, command, from_recovery=False):
 
-        cmd = command.command.upper()
+        cmd = command.command
 
         handler = self.handlers.get(cmd)
 
         if handler is None:
             return "UNKNOWN COMMAND"
 
-        return handler(*command.arguments)
+        result = handler(
+            *command.arguments
+        )
+
+        # Don't write replayed commands
+        # back into the AOF.
+        if (
+            self.aof is not None
+            and not from_recovery
+            and cmd in {"SET", "DEL", "HSET"}
+        ):
+            self.aof.append(command)
+
+        return result
