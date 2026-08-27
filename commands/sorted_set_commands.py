@@ -7,8 +7,18 @@ class SortedSetCommands:
 
         self.db = db
 
-        # key -> SortedSet
-        self.sorted_sets = {}
+    # --------------------------------------------------
+    # Get existing SortedSet
+    # --------------------------------------------------
+
+    def _get_zset(self, key):
+
+        node = self.db.store.get(key)
+
+        if node is None:
+            return None
+
+        return node.value
 
     # --------------------------------------------------
     # ZADD key score member
@@ -18,11 +28,38 @@ class SortedSetCommands:
 
         score = float(score)
 
-        if key not in self.sorted_sets:
+        node = self.db.store.get(key)
 
-            self.sorted_sets[key] = SortedSet()
+        # ----------------------------------------------
+        # Create SortedSet if key doesn't exist
+        # ----------------------------------------------
 
-        zset = self.sorted_sets[key]
+        if node is None:
+
+            zset = SortedSet()
+
+            node = Node(
+                key,
+                zset
+            )
+
+            self.db.store[key] = node
+
+            self.db.lru.add_to_front(node)
+
+        else:
+
+            zset = node.value
+
+            if not isinstance(zset, SortedSet):
+
+                return "WRONGTYPE"
+
+            self.db.lru.move_to_front(node)
+
+        # ----------------------------------------------
+        # Add member
+        # ----------------------------------------------
 
         return zset.add(
             member,
@@ -35,11 +72,15 @@ class SortedSetCommands:
 
     def zscore(self, key, member):
 
-        zset = self.sorted_sets.get(key)
+        zset = self._get_zset(key)
 
         if zset is None:
 
             return None
+
+        if not isinstance(zset, SortedSet):
+
+            return "WRONGTYPE"
 
         return zset.score(
             member
@@ -51,21 +92,27 @@ class SortedSetCommands:
 
     def zrem(self, key, member):
 
-        zset = self.sorted_sets.get(key)
+        zset = self._get_zset(key)
 
         if zset is None:
 
             return 0
 
+        if not isinstance(zset, SortedSet):
+
+            return "WRONGTYPE"
+
         result = zset.remove(
             member
         )
 
-        # If SortedSet becomes empty,
-        # remove the entire key.
+        # ----------------------------------------------
+        # SortedSet became empty
+        # ----------------------------------------------
+
         if len(zset.member_to_score) == 0:
 
-            del self.sorted_sets[key]
+            self.db.delete(key)
 
         return result
 
@@ -75,16 +122,17 @@ class SortedSetCommands:
 
     def zrange(self, key, start, stop):
 
-        zset = self.sorted_sets.get(key)
+        zset = self._get_zset(key)
 
         if zset is None:
 
             return []
 
-        start = int(start)
-        stop = int(stop)
+        if not isinstance(zset, SortedSet):
+
+            return "WRONGTYPE"
 
         return zset.range(
-            start,
-            stop
+            int(start),
+            int(stop)
         )
