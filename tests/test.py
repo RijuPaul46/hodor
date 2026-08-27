@@ -1,39 +1,15 @@
 from engine.command import Command
 from persistence.aof import AOF
+from storage.database import Database
+
+db = Database(capacity=2)
 
 
-aof = AOF("test.aof")
+db.set("A", 10)
+db.set("B", 20)
 
-aof.append(
-    Command(
-        "SET",
-        ["name", "Riju"]
-    )
-)
+db.get("A")
 
-aof.append(
-    Command(
-        "SET",
-        ["age", "20"]
-    )
-)
+evicted = db.set("C", 30)
 
-aof.append(
-    Command(
-        "DEL",
-        ["age"]
-    )
-)
-
-print("\nCommands stored in AOF:\n")
-
-for command, arguments in aof.load():
-
-    print(
-        "Command:",
-        command,
-        "Arguments:",
-        arguments
-    )
-
-aof.close()
+print("Evicted:", evicted)

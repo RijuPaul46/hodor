@@ -7,52 +7,108 @@ from datastructures.doubly_linked_list import (
     DoublyLinkedList
 )
 
+from engine.command import Command
+
 
 class Database:
 
     def __init__(self, capacity=1000):
 
+        # --------------------------------------------------
         # Main storage
         # key -> Node
+        # --------------------------------------------------
+
         self.store = {}
 
+        # --------------------------------------------------
         # LRU
+        # --------------------------------------------------
+
         self.capacity = capacity
         self.lru = DoublyLinkedList()
 
+        # --------------------------------------------------
         # TTL
         # key -> expiry timestamp
+        # --------------------------------------------------
+
         self.expiry = {}
 
+        # --------------------------------------------------
         # Min heap
         # (expiry_time, version, key)
+        # --------------------------------------------------
+
         self.expiry_heap = []
 
+        # --------------------------------------------------
+        # Expiry version
         # Used to invalidate old heap entries
-        #Repetadely update version for one key after processing ...
-        #so later 
+        # --------------------------------------------------
+
         self.expiry_version = {}
 
+        # --------------------------------------------------
         # Thread safety
+        # --------------------------------------------------
+
         self.lock = threading.Lock()
+
+        # --------------------------------------------------
+        # Mutation callback
+        #
+        # Somebody outside the database can register a
+        # function here.
+        #
+        # Example:
+        #
+        # db.set_mutation_callback(my_function)
+        #
+        # Whenever Database internally deletes something
+        # because of eviction/TTL, we can notify that function.
+        # --------------------------------------------------
+
+        self.on_mutation = None
+
+        # --------------------------------------------------
+        # Expiry worker
+        # --------------------------------------------------
+
         self.expiry_thread = threading.Thread(
-        target=self._expiry_worker,
-        daemon=True
+            target=self._expiry_worker,
+            daemon=True
         )
 
         self.expiry_thread.start()
 
-    # --------------------------------------------------
+    # ======================================================
+    # MUTATION CALLBACK
+    # ======================================================
+
+    def set_mutation_callback(self, callback):
+
+        self.on_mutation = callback
+
+    def _notify_mutation(self, command):
+
+        if self.on_mutation is not None:
+
+            self.on_mutation(command)
+
+    # ======================================================
     # SET
-    # --------------------------------------------------
+    # ======================================================
 
     def set(self, key, value, ttl=None):
 
+        mutation = None
+
         with self.lock:
 
-            # ------------------------------------------
+            # --------------------------------------------------
             # Existing key
-            # ------------------------------------------
+            # --------------------------------------------------
 
             if key in self.store:
 
@@ -62,51 +118,71 @@ class Database:
 
                 self.lru.move_to_front(node)
 
-            # ------------------------------------------
+            # --------------------------------------------------
             # New key
-            # ------------------------------------------
+            # --------------------------------------------------
 
             else:
 
-                node = Node(key, value)
+                node = Node(
+                    key,
+                    value
+                )
 
                 self.store[key] = node
 
                 self.lru.add_to_front(node)
 
-            # ------------------------------------------
+            # --------------------------------------------------
             # TTL handling
-            # ------------------------------------------
+            # --------------------------------------------------
 
             if ttl is not None:
 
-                expires_at = time.monotonic() + ttl
+                expires_at = (
+                    time.monotonic() + ttl
+                )
 
                 self.expiry[key] = expires_at
 
-                version = self.expiry_version.get(key, 0) + 1
+                version = (
+                    self.expiry_version.get(
+                        key,
+                        0
+                    ) + 1
+                )
 
                 self.expiry_version[key] = version
 
                 heapq.heappush(
                     self.expiry_heap,
-                    (expires_at, version, key)
+                    (
+                        expires_at,
+                        version,
+                        key
+                    )
                 )
 
             else:
 
                 # SET without TTL means
-                # key should live forever
+                # key lives forever.
 
-                self.expiry.pop(key, None)
-
-                self.expiry_version[key] = (
-                    self.expiry_version.get(key, 0) + 1
+                self.expiry.pop(
+                    key,
+                    None
                 )
 
-            # ------------------------------------------
+                self.expiry_version[key] = (
+                    self.expiry_version.get(
+                        key,
+                        0
+                    ) + 1
+                )
+
+            # --------------------------------------------------
             # LRU eviction
-            # ------------------------------------------
+            # --------------------------------------------------
 
             if len(self.store) > self.capacity:
 
@@ -118,15 +194,48 @@ class Database:
 
                     del self.store[old_key]
 
-                    self.expiry.pop(old_key, None)
-
-                    self.expiry_version[old_key] = (
-                        self.expiry_version.get(old_key, 0) + 1
+                    self.expiry.pop(
+                        old_key,
+                        None
                     )
 
-    # --------------------------------------------------
+                    self.expiry_version[old_key] = (
+                        self.expiry_version.get(
+                            old_key,
+                            0
+                        ) + 1
+                    )
+
+                    # We DON'T call the callback while
+                    # holding the database lock.
+                    #
+                    # We only remember what happened.
+                    mutation = Command(
+                        "DEL",
+                        [old_key]
+                    )
+
+        # --------------------------------------------------
+        # Database lock has now been released.
+        #
+        # Now it is safe to notify outside systems.
+        # --------------------------------------------------
+
+        if mutation is not None:
+
+            self._notify_mutation(mutation)
+
+        # Return the evicted key because your existing
+        # tests/useful logic may depend on it.
+        if mutation is not None:
+
+            return mutation.arguments[0]
+
+        return None
+
+    # ======================================================
     # GET
-    # --------------------------------------------------
+    # ======================================================
 
     def get(self, key):
 
@@ -135,11 +244,12 @@ class Database:
             node = self.store.get(key)
 
             if node is None:
+
                 return None
 
-            # ------------------------------------------
+            # --------------------------------------------------
             # Check expiration
-            # ------------------------------------------
+            # --------------------------------------------------
 
             if self._is_expired(key):
 
@@ -147,74 +257,98 @@ class Database:
 
                 return None
 
-            # ------------------------------------------
+            # --------------------------------------------------
             # Mark as recently used
-            # ------------------------------------------
+            # --------------------------------------------------
 
             self.lru.move_to_front(node)
 
             return node.value
 
-    # --------------------------------------------------
+    # ======================================================
     # DELETE
-    # --------------------------------------------------
+    # ======================================================
 
     def delete(self, key):
 
         with self.lock:
 
             if key not in self.store:
+
                 return 0
 
             self._delete_no_lock(key)
 
             return 1
 
-    # --------------------------------------------------
+    # ======================================================
     # INTERNAL DELETE
-    # --------------------------------------------------
+    # ======================================================
 
     def _delete_no_lock(self, key):
 
         node = self.store.get(key)
 
         if node is None:
-            return
+
+            return False
 
         self.lru.remove(node)
 
         del self.store[key]
 
-        self.expiry.pop(key, None)
-
-        # Invalidate any old heap entry
-        self.expiry_version[key] = (
-            self.expiry_version.get(key, 0) + 1
+        self.expiry.pop(
+            key,
+            None
         )
 
-    # --------------------------------------------------
+        # --------------------------------------------------
+        # Invalidate old heap entry
+        # --------------------------------------------------
+
+        self.expiry_version[key] = (
+            self.expiry_version.get(
+                key,
+                0
+            ) + 1
+        )
+
+        return True
+
+    # ======================================================
     # EXPIRATION CHECK
-    # --------------------------------------------------
+    # ======================================================
 
     def _is_expired(self, key):
 
         expires_at = self.expiry.get(key)
 
         if expires_at is None:
+
             return False
 
-        return time.monotonic() >= expires_at
+        return (
+            time.monotonic() >= expires_at
+        )
 
-    
+    # ======================================================
+    # EXPIRY WORKER
+    # ======================================================
+
     def _expiry_worker(self):
 
         while True:
 
+            # --------------------------------------------------
+            # Find next expiration
+            # --------------------------------------------------
+
             with self.lock:
 
-                # Nothing to expire
                 if not self.expiry_heap:
+
                     sleep_time = 1
+
                     entry = None
 
                 else:
@@ -225,11 +359,13 @@ class Database:
 
                     now = time.monotonic()
 
-                    sleep_time = expires_at - now
+                    sleep_time = (
+                        expires_at - now
+                    )
 
-            # ------------------------------------------
+            # --------------------------------------------------
             # Nothing currently needs processing
-            # ------------------------------------------
+            # --------------------------------------------------
 
             if entry is None:
 
@@ -237,9 +373,9 @@ class Database:
 
                 continue
 
-            # ------------------------------------------
+            # --------------------------------------------------
             # Earliest key hasn't expired
-            # ------------------------------------------
+            # --------------------------------------------------
 
             if sleep_time > 0:
 
@@ -247,40 +383,74 @@ class Database:
 
                 continue
 
-            # ------------------------------------------
+            # --------------------------------------------------
             # Earliest key has expired
-            # ------------------------------------------
+            # --------------------------------------------------
+
+            mutation = None
 
             with self.lock:
 
-                # Heap could have changed while
-                # we were sleeping.
                 if not self.expiry_heap:
+
                     continue
-                    # entry get poped 
-                expires_at, version, key = heapq.heappop(
-                    self.expiry_heap
+
+                expires_at, version, key = (
+                    heapq.heappop(
+                        self.expiry_heap
+                    )
                 )
 
-                # --------------------------------------
+                # --------------------------------------------------
                 # Check stale heap entry
-                # --------------------------------------
+                # --------------------------------------------------
 
-                current_version = self.expiry_version.get(
-                    key,
-                    0
+                current_version = (
+                    self.expiry_version.get(
+                        key,
+                        0
+                    )
                 )
 
                 if current_version != version:
+
                     continue
 
-                current_expiry = self.expiry.get(key)
+                current_expiry = (
+                    self.expiry.get(key)
+                )
 
                 if current_expiry != expires_at:
+
                     continue
 
-                # --------------------------------------
+                # --------------------------------------------------
                 # Current expiration
-                # --------------------------------------
-                print(f"Expired key: {key}")
-                self._delete_no_lock(key)
+                # --------------------------------------------------
+
+                deleted = self._delete_no_lock(
+                    key
+                )
+
+                if deleted:
+
+                    print(
+                        f"Expired key: {key}"
+                    )
+
+                    mutation = Command(
+                        "DEL",
+                        [key]
+                    )
+
+            # --------------------------------------------------
+            # Lock is released.
+            #
+            # Notify outside systems now.
+            # --------------------------------------------------
+
+            if mutation is not None:
+
+                self._notify_mutation(
+                    mutation
+                )

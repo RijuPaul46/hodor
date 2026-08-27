@@ -1,6 +1,7 @@
 from commands.string_commands import StringCommands
 from commands.hash_commands import HashCommands
-
+from commands.sorted_set_commands import SortedSetCommands
+from datastructures.sorted_set import SortedSet
 
 class CommandExecutor:
 
@@ -12,7 +13,7 @@ class CommandExecutor:
 
         self.string = StringCommands(db)
         self.hash = HashCommands(db)
-
+        self.sorted_set = SortedSetCommands(db)
         self.handlers = {
             "SET": self.string.set,
             "GET": self.string.get,
@@ -20,6 +21,10 @@ class CommandExecutor:
 
             "HSET": self.hash.hset,
             "HGET": self.hash.hget,
+            "ZADD": self.sorted_set.zadd,
+            "ZSCORE": self.sorted_set.zscore,
+            "ZRANGE": self.sorted_set.zrange,
+            "ZREM": self.sorted_set.zrem,
         }
 
     def execute(self, command, from_recovery=False):
